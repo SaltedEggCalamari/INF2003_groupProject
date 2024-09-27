@@ -10,7 +10,7 @@ To set up your VS Code,
 6. Create database in mariadb
     "create database infmaindb"
 7. Run main.py
-8. Open http://127.0.0.1:5000/test_connection in your browser
+8. Open "http://127.0.0.1:5000/test_connection" in your browser
 
 It should say "This is working" and done.
 
