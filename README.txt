@@ -8,7 +8,8 @@ To set up your VS Code,
     "pip install flask-cors"
 5. Adjusts the necessary lines in config.py
 6. Create database in mariadb
-    "create database infmaindb"
+    "create database infmaindb;"
+    run sql files (refer to lab 2 for instructions)
 7. Run main.py
 8. Open "http://127.0.0.1:5000/test_connection" in your browser
 
