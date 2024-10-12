@@ -21,8 +21,8 @@ def test_connection():
         cursor = connection.cursor(dictionary=True)
         
         # Execute queries
-        cursor.execute("create or replace table test (test_col text)")
-        cursor.execute("insert into test values ('This is working')")
+        cursor.execute("CREATE OR REPLACE TABLE test (test_col text)")
+        cursor.execute("INSERT INTO test VALUES ('This is working')")
         cursor.execute("SELECT * FROM test")
         
         data = cursor.fetchall()
@@ -96,7 +96,6 @@ def insert_to_table_name(table_name):
 
 
 ## ROUTE --> READ ##
-
 @app.route('/table', methods=['GET'])       # Get name of all tables in database as JSON
 def get_table_names():
     try:
@@ -105,7 +104,7 @@ def get_table_names():
         cursor = connection.cursor(dictionary=True)
         
         # Execute query
-        cursor.execute("show tables")
+        cursor.execute("SHOW TABLES")
         data = cursor.fetchall()
         
         # Close the connection
@@ -162,7 +161,7 @@ def update_to_table_name(table_name):
         condition_value = data.get("condition")
         
         # Get Field and Type of table columns
-        query = "show columns from " + table_name
+        query = "SHOW COLUMNS FROM " + table_name
         cursor.execute(query)
         table_info = cursor.fetchall()
         column_fields = []
@@ -249,9 +248,13 @@ def delete_from_table_name(table_name):
 
 
 ## ROUTE --> BUILD ##
-
-@app.route('/build/<string:product_name>/<int:qty>', methods=['UPDATE'])
-def build_product(table_name):
+# Sample response.json
+# {
+#     Model: "x",
+#     Qty: y
+# }
+@app.route('/build', methods=['UPDATE'])
+def build_product():
     try:
         # Establish database connection
         connection = get_db_connection()
@@ -259,60 +262,74 @@ def build_product(table_name):
 
         # Send a request for data from frontend
         data = request.json
-        
-        # Get columns fields of table
-        query = "show columns from " + table_name
+        product_model = data.get('Model')
+        build_qty = data.get('Qty')
+
+        # Building recipe for products {Product model: [ [component_model], [no. of components] ]}
+        recipe = {
+            'BS-400': [['SD-100', 'SC-700', 'PCB-11', 'PC-300', 'CCB-500', 'BAT-5000'], [1,1,1,1,1,1]],
+            'BS-600': [['SD-200', 'SC-700', 'PCB-11', 'PC-300', 'CCB-500', 'BAT-5000'], [1,2,1,1,1,1]],
+            'BS-650': [['SD-300', 'SC-800', 'PCB-12', 'PC-300', 'CCB-700', 'BAT-5000'], [2,2,1,1,1,2]],
+            'PC-5000': [['BAT-5000', 'CCB-500', 'PC-200'], [1,1,1]],
+            'PC-10000': [['BAT-10K', 'CCB-700', 'PC-200'], [1,1,1]],
+        }
+
+        # Generate and execute query
+        components, recipe_qty = recipe[product_model]
+        conditions = []
+        for component, qty in zip(components, recipe_qty):
+            conditions.append(f"(Model = '{component}' AND Qty >= {build_qty*qty})")
+
+        condition_query = " OR ".join(conditions)
+        query = f"SELECT Model, Qty FROM inventory WHERE {condition_query}"
+
         cursor.execute(query)
-        table_info = cursor.fetchall()
+        fetch = cursor.fetchall()
 
-        # Loops through table columns to get info on field name and data type
-        new_insert = {}
-        for column in table_info:
-            Field = column.get("Field")
-            Type = column.get("Type")
+        # Check if components are sufficient for build
+        if(len(fetch) == len(components)): check = True
+        else: check = False
 
-            # Excludes fields that have a default value
-            if ('ID' not in Field and 'DateTime' not in Field):
+        # Update inventory
+        if(check):
 
-                # Data type matching between request data and table fields
-                if ('int' in Type):
-                    new_insert.update({Field: int(data.get(Field))})
-                
-                elif ('decimal' in Type):
-                    new_insert.update({Field: float(data.get(Field))})
-                
-                elif ('varchar' in Type or 'text' in Type):
-                    new_insert.update({Field: data.get(Field)})
-                
-                elif ('date' in Type):
-                    date_obj = datetime.strptime(data.get(Field), '%Y-%m-%d')
-                    sql_date = date_obj.strftime('%Y-%m-%d')
-                    new_insert.update({Field: sql_date})
+            # Get original qty of product from inventory
+            query = f"SELECT qty FROM inventory WHERE Model = '{product_model}'"
+            cursor.execute(query)
+            fetch = cursor.fetchall()[0]
+            original_qty = fetch.get("qty")
+
+            # Update qty of product to new quantity
+            query = f"UPDATE inventory SET Qty = {original_qty+build_qty} WHERE Model = '{product_model}'"
+            cursor.execute(query)
+
+            # Get original qty of components    
+            conditions = []
+            for component in components:
+                conditions.append(f"Model = '{component}'")
+            condition_query = " OR ".join(conditions)
+
+            query = f"SELECT Model, qty FROM inventory WHERE ({condition_query})"
+            cursor.execute(query)
+            fetch = cursor.fetchall()
+
+            # Update qty of components to new quantity            
+            conditions = []
+            models = []
+            for component in fetch:
+                model = component.get("Model")
+                qty = component.get("qty") - build_qty
+
+                conditions.append(f"WHEN Model = '{model}' THEN {qty}")
+                models.append(f"'{model}'")
+
+            condition_query = " ".join(conditions)
+            model_query = ", ".join(models)
+            
+            query = f"UPDATE inventory SET Qty = CASE {condition_query} END WHERE Model IN ({model_query})"
+            cursor.execute(query)
 
         # Execute and commit query
-        if (table_name == 'inventory'):
-            cursor.execute('''INSERT INTO inventory 
-                           (Name, Description, SKU, Model, Qty, Location, RawProd)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                           [new_insert.get('Name'),
-                            new_insert.get('Description'),
-                            new_insert.get('SKU'),
-                            new_insert.get('Model'),
-                            new_insert.get('Qty'),
-                            new_insert.get('Location'),
-                            new_insert.get('RawProd')])
-            
-        if (table_name == 'purchasing'):
-            cursor.execute('''INSERT INTO purchasing 
-                           (PurchasingInvoiceNum, ProductName, Price, Model, SKU, Qty, PurchasingDate)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                           [new_insert.get('PurchasingInvoiceNum'),
-                            new_insert.get('ProductName'),
-                            new_insert.get('Price'),
-                            new_insert.get('Model'),
-                            new_insert.get('SKU'),
-                            new_insert.get('Qty'),
-                            new_insert.get('PurchasingDate')])
         connection.commit()
             
         # Close the connectione and return
@@ -336,60 +353,6 @@ def check_product(table_name):
         # Send a request for data from frontend
         data = request.json
         
-        # Get columns fields of table
-        query = "show columns from " + table_name
-        cursor.execute(query)
-        table_info = cursor.fetchall()
-
-        # Loops through table columns to get info on field name and data type
-        new_insert = {}
-        for column in table_info:
-            Field = column.get("Field")
-            Type = column.get("Type")
-
-            # Excludes fields that have a default value
-            if ('ID' not in Field and 'DateTime' not in Field):
-
-                # Data type matching between request data and table fields
-                if ('int' in Type):
-                    new_insert.update({Field: int(data.get(Field))})
-                
-                elif ('decimal' in Type):
-                    new_insert.update({Field: float(data.get(Field))})
-                
-                elif ('varchar' in Type or 'text' in Type):
-                    new_insert.update({Field: data.get(Field)})
-                
-                elif ('date' in Type):
-                    date_obj = datetime.strptime(data.get(Field), '%Y-%m-%d')
-                    sql_date = date_obj.strftime('%Y-%m-%d')
-                    new_insert.update({Field: sql_date})
-
-        # Execute and commit query
-        if (table_name == 'inventory'):
-            cursor.execute('''INSERT INTO inventory 
-                           (Name, Description, SKU, Model, Qty, Location, RawProd)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                           [new_insert.get('Name'),
-                            new_insert.get('Description'),
-                            new_insert.get('SKU'),
-                            new_insert.get('Model'),
-                            new_insert.get('Qty'),
-                            new_insert.get('Location'),
-                            new_insert.get('RawProd')])
-            
-        if (table_name == 'purchasing'):
-            cursor.execute('''INSERT INTO purchasing 
-                           (PurchasingInvoiceNum, ProductName, Price, Model, SKU, Qty, PurchasingDate)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s)''',
-                           [new_insert.get('PurchasingInvoiceNum'),
-                            new_insert.get('ProductName'),
-                            new_insert.get('Price'),
-                            new_insert.get('Model'),
-                            new_insert.get('SKU'),
-                            new_insert.get('Qty'),
-                            new_insert.get('PurchasingDate')])
-        connection.commit()
             
         # Close the connectione and return
         cursor.close()
