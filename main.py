@@ -342,22 +342,70 @@ def build_product():
 
 
 ## ROUTE --> CHECK ##
-
-@app.route('/check/<string:product_name>', methods=['GET'])
-def check_product(table_name):
+@app.route('/check_required/', methods=['GET'])
+def purchased_product():
     try:
         # Establish database connection
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        # Send a request for data from frontend
-        data = request.json
+        # Search for incompleted sales info
+        # Returns {
+        #   "Model": "x"
+        #   "Needed": y
+        #   "Available": z
+        # }
+        query = '''SELECT sales.Model, COUNT(*) AS Needed, inventory.Qty AS Available
+            FROM sales
+            LEFT JOIN inventory ON sales.Model = inventory.Model
+            WHERE Completed = 0
+            GROUP BY sales.Model'''
+        cursor.execute(query)
+        fetch = cursor.fetchall()
         
-            
+        # Compares Needed qty to Available qty and generates a report
+        # {
+        #   "Model": [
+        #     "BAT-3000",
+        #     "BS-400",
+        #     "BS-600",
+        #     "BS-650",
+        #     "PC-10000",
+        #     "PC-5000",
+        #     "USB-009" ]
+        #   "Sufficient": [1, 0, ..., 0]     # 1 = sufficient, 0 = insufficient
+        #   "Build_qty": [0, x, ..., y]      # How many more to build, if sufficient then 0
+        # }
+
+        data = {
+            "Model": [],
+            "Sufficient": [],
+            "Build_qty": []
+        }
+        Model_list = []
+        Sufficient_list = []
+        Build_qty_list = []
+        for product in fetch:
+            Model_list.append(product.get("Model"))
+            need = product.get("Needed")
+            avail = product.get("Available")
+
+            if (need > avail):
+                Sufficient_list.append(0)
+                Build_qty_list.append(need-avail)
+
+            elif (avail >= need):
+                Sufficient_list.append(1)
+                Build_qty_list.append(0)
+        
+        data.update({"Model": Model_list})
+        data.update({"Sufficient": Sufficient_list})
+        data.update({"Build_qty": Build_qty_list})
+
         # Close the connectione and return
         cursor.close()
         connection.close()
-        return
+        return jsonify(data)
     
     except mysql.connector.Error as err:
         return jsonify({"error": str(err)}), 500
